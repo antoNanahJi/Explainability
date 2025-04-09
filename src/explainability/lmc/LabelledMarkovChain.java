@@ -1,0 +1,336 @@
+/*
+ * Copyright (C)  2020  Zainab Fatmi, Amgad Rady, and Franck van Breugel
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package explainability.lmc;
+
+import static explainability.lmc.Constants.PRECISION;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Random;
+import java.util.Scanner;
+import java.util.Set;
+
+/**
+ * A labelled Markov chain.
+ * The states of the chain are nonnegative integers.
+ * The labels of the chain are nonnegative integers.
+ *
+ * @author Zainab Fatmi
+ * @author Amgad Rady
+ * @author Franck van Breugel
+ */
+public class LabelledMarkovChain {
+	
+	/*
+	 * Number of labels of this labelled Markov chain.
+	 */
+	private int numberOfLabels;
+	
+	/*
+	 * For all 0 <= s < this.getNumberOfStates(),
+	 * label[s] = label of state s.
+	 */
+	private final int[] label;
+	
+	/*
+	 * For all 0 <= s, t < this.getNumberOfStates(),
+	 * probability[s][t] = probability of transitioning from state s to state t.
+	 */
+	private final double[][] probability;
+	
+	/**
+	 * Initializes this labelled Markov chain from the files &lt;name&gt;.lab that contains
+	 * the labelling function and &lt;name&gt;.tra that contains the transitions and their
+	 * probabilities.
+	 * 
+	 * @param name the name of the files that contains the state labelling and the
+	 * transition probabilities
+	 * @throws IllegalArgumentException if &lt;name&gt;.lab or &lt;name&gt;.tra is not of the right format
+	 * @throws FileNotFoundException if &lt;name&gt;.lab or &lt;name&gt;.tra cannot be read
+	 */
+	public LabelledMarkovChain(String name) throws IllegalArgumentException, FileNotFoundException {
+
+		// read transition probabilities
+		Scanner input = new Scanner(new File(name + ".tra"));
+		if (!input.hasNextInt()) {
+			input.close();
+			throw new IllegalArgumentException("Labelled Markov chain is too large: number of states must be representable as an integer.");
+		}
+		int numberOfStates = input.nextInt(); // number of states
+
+		if (!input.hasNextInt()) {
+			input.close();
+			throw new IllegalArgumentException("Labelled Markov chain is too large: number of transitions must be representable as an integer");
+		}
+		int transitions = input.nextInt(); // number of transitions
+
+		this.probability = new double[numberOfStates][numberOfStates]; // transition probabilities
+		for (int i = 0; i < transitions; i++) {
+			this.probability[input.nextInt()][input.nextInt()] += input.nextDouble(); // add probabilities of transitions with the same source and target
+		}
+		input.close();
+
+		// read labels
+		input = new Scanner(new File(name + ".lab"));
+		Map<String, Integer> labelMap = new HashMap<String, Integer>(); // maps state labelling to indices
+		this.label = new int[numberOfStates];
+		int index = 1; // index 0 is reserved for states without a label
+		int numberOfStatesWithoutLabel = numberOfStates;
+		while (input.hasNextLine()) {
+			String[] line = input.nextLine().split(":");
+			int state = Integer.parseInt(line[0]);
+			String labelling = line[1];
+			if (labelMap.containsKey(labelling)) {
+				label[state] = labelMap.get(labelling);
+			} else {
+				labelMap.put(labelling, index);
+				label[state] = index;
+				index++;
+			}
+			numberOfStatesWithoutLabel--;
+		}
+		input.close();
+		
+		// index 0 is reserved for states without a label
+		if (numberOfStatesWithoutLabel == 0) {
+			for (int state = 0; state < numberOfStates; state++) {
+				label[state]--;
+			}
+			this.numberOfLabels = labelMap.size();
+		} else {
+			this.numberOfLabels = labelMap.size() + 1; 
+		}
+	}
+
+	/**
+	 * Initializes this labelled Markov chain with the given state
+	 * labeling and transition probabilities.
+	 *
+	 * @param label the state labelling of this labelled Markov chain
+	 * @param probability the transition probabilities of this labelled Markov chain
+	 * @param numberOfLabels the number of labels of this labelled Markov chain
+	 */
+	private LabelledMarkovChain(int[] label, double[][] probability, int numberOfLabels) {
+		this.label = label;
+		this.probability = probability;
+		this.numberOfLabels = numberOfLabels;
+	}
+
+	/**
+	 * Returns a random labelled Markov chain with the given number of states
+	 * and the given number of labels.
+	 * 
+	 * The underlying graph is generated by means of the Erdős–Rényi model.
+	 * For each state, the probabilities of its outgoing transitions form a
+	 * uniform distribution.
+	 * 
+	 * @param numberOfStates the number of states
+	 * @pre. numberOfStates &gt; 0
+	 * @param numberOfLabels the number of labels
+	 * @pre. numberOfLabels &gt; 0
+	 * @return a random labelled Markov chain
+	 */
+	public static LabelledMarkovChain randomUniform(int numberOfStates, int numberOfLabels) {
+		Random random = new Random();
+
+		// generate transition probabilities
+		double[][] probability = new double[numberOfStates][numberOfStates];
+		double threshold = 2 * Math.log(numberOfStates) / numberOfStates;
+		for (int source = 0; source < numberOfStates; source++) {
+			int outgoing = 0; // number of outgoing transitions of source
+			for (int target = 0; target < numberOfStates; target++) {
+				if (random.nextDouble() < threshold) {
+					probability[source][target] = 1;
+					outgoing++;
+				}
+			}
+			if (outgoing > 0) {
+				for (int target = 0; target < numberOfStates; target++) {
+					probability[source][target] /= outgoing;
+				}
+			} else {
+				probability[source][source] = 1;
+			}
+		}
+
+		// generate labels
+		int[] label = new int[numberOfStates];
+		Set<Integer> labels = new HashSet<Integer>();
+		for (int state = 0; state < numberOfStates; state++) {
+			label[state] = random.nextInt(numberOfLabels);
+			labels.add(label[state]);
+		}
+		
+		return new LabelledMarkovChain(label, probability, numberOfLabels);
+	}
+	
+	/**
+	 * Returns the number of states of this labelled Markov chain.
+	 * 
+	 * @return the number of states of this labelled Markov chain
+	 */
+	public int getNumberOfStates() {
+		return this.label.length;
+	}
+	
+	/**
+	 * Returns the number of labels of this labelled Markov chain.
+	 * 
+	 * @return the number of labels of this labelled Markov chain
+	 */
+	public int getNumberOfLabels() {
+		return this.numberOfLabels;
+	}
+
+	/**
+	 * Returns the label of the given state of this labelled Markov chain.
+	 * 
+	 * @param state a state of this labelled Markov chain
+	 * @pre. state &ge; 0
+	 * @return the label of the given state of this labelled Markov chain
+	 */
+	public int getLabel(int state) {
+		return this.label[state];
+	}
+
+	/**
+	 * Returns the probability distribution of the given state of this labelled Markov chain.
+	 *
+	 * @param state a state of this labelled Markov chain
+	 * @pre. 0 &le; state &lt; chain.getNumberOfStates()
+	 * @return the probability distribution of the given state of this labelled Markov chain
+	 */
+	public double[] getProbability(int state) {
+		return this.probability[state];
+	}
+	
+	/**
+	 * Returns the probability of the transition from the given source state to the 
+	 * given target state of this labelled Markov chain.
+	 *
+	 * @param source a state of this labelled Markov chain
+	 * @pre. source &ge; 0
+	 * @param target a state of this labelled Markov chain
+	 * @pre. target &ge; 0
+	 * @return the probability of the transition from the given source state to the 
+	 * given target state of this labelled Markov chain
+	 */
+	public double getProbability(int source, int target) {
+		return this.probability[source][target];
+	}
+
+	/**
+	 * Return the hash code of this labelled Markov chain.
+	 * 
+	 * @return the hash code of this labelled Markov chain
+	 */
+	@Override
+	public int hashCode() {
+		return Arrays.deepHashCode(this.probability);
+	}
+
+	/**
+	 * Tests whether this labelled Markov chain is equal to the given object.
+	 * 
+	 * @param object an object
+	 * @return true if this labelled Markov chain is equal to the given object,
+	 * false otherwise.
+	 */
+	@Override
+	public boolean equals(Object object) {
+		if (object != null && this.getClass() == object.getClass()) {
+			LabelledMarkovChain other = (LabelledMarkovChain) object;
+			Map<Integer, Integer> correspondence = new HashMap<Integer, Integer>();
+			boolean equals = this.label.length == other.label.length;
+			for (int state = 0; state < this.label.length && equals; state++) {
+				if (correspondence.containsKey(this.label[state])) {
+					equals = correspondence.get(this.label[state]) == other.label[state];
+				} else {
+					correspondence.put(this.label[state], other.label[state]);
+				}
+			}
+			return equals && Arrays.deepEquals(this.probability, other.probability);
+		} else {
+			return false;
+		}
+	}
+
+	/**
+	 * Returns a string representation of the labelling of this labelled Markov chain.
+	 * 
+	 * @return a string representation of the labelling of this labelled Markov chain
+	 */
+	public String getLabels() {
+		StringBuffer representation = new StringBuffer();
+		for (int state = 0; state < this.label.length; state++) {
+			representation.append(state + ": " + this.label[state] + "\n");
+		}
+		return representation.toString();
+	}
+
+	/**
+	 * Returns a string representation of the transitions and their probabilities of this labelled Markov chain.
+	 * 
+	 * @return a string representation of the transitions and their probabilities of this labelled Markov chain
+	 */
+	public String getProbabilities() {
+		StringBuffer representation = new StringBuffer();
+		for (int source = 0; source < this.probability.length; source++) {
+			for (int target = 0; target < this.probability[source].length; target++) {
+				representation.append(source + " " + target + " " + this.probability[source][target] + "\n");
+			}
+		}
+		return representation.toString();
+	}
+
+	/**
+	 * Returns a string representation of this labelled Markov chain.
+	 *
+	 * @return a string representation of this labelled Markov chain
+	 */
+	@Override
+	public String toString() {
+		return "Labels:\n" + this.getLabels() + "\nProbabilities:\n" + this.getProbabilities();
+	}
+	
+	/**
+	 * Returns a string representation of this labelled Markov chain
+	 * in dot format.
+	 * 
+	 * @return a string representation of this labelled Markov chain
+	 * in dot format.
+	 */
+	public String toDot() {
+		String dot = "digraph LabelledMarkovChain {\n";
+		dot += "  node [colorscheme=\"set312\" style=wedged];\n";
+		for (int s = 0; s < this.getNumberOfStates(); s++) {
+			dot += String.format("  %d [style=filled fillcolor=%d];\n", s, this.label[s] + 1);
+			for (int t = 0; t < this.getNumberOfStates(); t++) {
+				if (this.probability[s][t] > 0) {
+					dot += String.format("  %d -> %d [ label=\"%." + PRECISION + "f\" ];\n", s, t, this.probability[s][t]);
+				}
+			}
+		}
+		dot += "}\n";
+		return dot;
+	}
+}
